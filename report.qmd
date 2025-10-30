@@ -1,34 +1,168 @@
 ---
 title: "EV Power - Lab 4 Project Report"
+author: "Catherine Zhang"
 format: typst
 ---
-
-# Example Solution 1
-
 ## **Part 0: libraries**
 
-```{r}
-
+```{r, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(janitor)
 ```
 
-## **Part 1:** **Defining Research Question**
+## **Part 1:** **Overview**
 
-Chosen Question:
+This report analyzes renewable electricity use across U.S. states between 2021 and 2023.  
+The two research questions explored are:
 
-## **Part 2: Data Preparation and Cleaning**
+1. How has the share of renewable energy changed from 2021–2023 across U.S. states?
+2. What is the share of electricity that comes from clean sources by state in 2023?
 
-```{r}
+Understanding these patterns helps assess how states are transitioning toward cleaner energy systems.
 
+## **Part 2: Data and Methods**
+
+The datasets include renewable and total energy use by state for 2021–2023.  
+Data were cleaned using the `tidyverse` and `janitor` packages to standardize column names, ensure consistent state naming, and remove non-numeric characters.
+
+### (1) Data Preparation & Cleaning
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+renew_21 <- read_csv("data/renew-use-2021.csv") |> clean_names()
+renew_22 <- read_csv("data/renew-use-2022.csv") |> clean_names()
+renew_23 <- read_csv("data/renew-use-2023.csv") |> clean_names()
+total_21 <- read_csv("data/total-use-2021.csv") |> clean_names()
+total_22 <- read_csv("data/total-use-2022.csv") |> clean_names()
+total_23 <- read_csv("data/total-use-2023.csv") |> clean_names()
+
+# Clean and combine renewable data
+renew_all <- bind_rows(
+  renew_21 |> mutate(year = 2021, renewable_use = as.numeric(str_replace_all(renewable_use_2021, "[^0-9.]", ""))),
+  renew_22 |> mutate(year = 2022, renewable_use = as.numeric(str_replace_all(renewable_use_2022, "[^0-9.]", ""))),
+  renew_23 |> mutate(year = 2023, renewable_use = as.numeric(str_replace_all(renewable_use_2023, "[^0-9.]", "")))
+) |>
+  mutate(
+    state = str_to_upper(str_trim(state)),
+    energy_source = str_to_title(str_trim(energy_source))
+  ) |>
+  select(state, energy_source, renewable_use, year)
+
+# Clean and combine total energy data
+clean_total <- \(df, y) df |> 
+  pivot_longer(-energy_source, names_to="state", values_to="total_use") |>
+  mutate(year = y, state = str_to_upper(state), energy_source = str_to_title(energy_source))
+
+total_all <- bind_rows(clean_total(total_21, 2021),
+                       clean_total(total_22, 2022),
+                       clean_total(total_23, 2023))
+
+head(renew_all)
+head(total_all)
 ```
 
-## **Part 3: Joining / Pivoting Datasets for Analysis**
+### (2) Joining / Pivoting Datasets for Analysis
 
-```{r}
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+# Summarize total renewable energy use by state & year
+renew_sum <- renew_all |>
+  group_by(state, year) |>
+  summarise(total_renew = sum(renewable_use, na.rm = TRUE), .groups = "drop")
 
+# Summarize total overall energy use by state & year
+total_sum <- total_all |>
+  group_by(state, year) |>
+  summarise(total_energy = sum(total_use, na.rm = TRUE), .groups = "drop")
+
+# Join and compute renewable share
+energy_joined <- renew_sum |>
+  left_join(total_sum, by = c("state", "year")) |>
+  mutate(renewable_share = total_renew / total_energy)
+
+# Create subsets for your two research questions
+renew_trend <- energy_joined |> filter(year %in% 2021:2023)       # for Q1
+renew_2023  <- energy_joined |> filter(year == 2023)              # for Q2
+
+head(energy_joined)
 ```
 
-## **Part 4: Mapping Visualization**
+## **Part 3: Map Visualization**
 
-```{r}
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+library(maps)
 
+## Map 1: Change in Renewable Energy Share (2021–2023)
+map_data_trend <- renew_trend |>
+  left_join(tibble(state = state.abb, region = tolower(state.name)), by = "state") |>
+  left_join(map_data("state"), by = "region", relationship = "many-to-many")
+
+ggplot(map_data_trend, aes(long, lat, group = group, fill = renewable_share)) +
+  geom_polygon(color = "white", linewidth = 0.2) +
+  coord_fixed(1.3) +
+  facet_wrap(~ year, ncol = 3) +
+  scale_fill_gradient(low = "lightyellow", high = "darkgreen",
+                      name = "Renewable Share",
+                      labels = scales::percent_format(accuracy = 1)) +
+  labs(
+    title = "Change in Renewable Energy Share (2021–2023)",
+    subtitle = "Each panel shows renewable energy share by state for that year",
+    caption = "Data: U.S. Energy datasets (2021–2023)"
+  ) +
+  theme_minimal(base_size = 10) +
+  theme(
+    axis.text = element_blank(),
+    axis.title = element_blank(),
+    panel.grid = element_blank(),
+    strip.text = element_text(size = 10, face = "bold"),
+    plot.title = element_text(size = 14, face = "bold"),
+    legend.position = "bottom"
+  )
+
+
+## Map 2: Share of Electricity from Clean Sources by State (2023)
+# Load U.S. state map data
+us_map <- map_data("state")
+
+# Prep data for joining (convert state abbreviations to full names)
+state_names <- tibble(
+  state = state.abb,
+  region = tolower(state.name)
+)
+
+# Merge map data with renewable share data (2023)
+map_data_2023 <- renew_2023 |>
+  left_join(state_names, by = "state") |>
+  left_join(us_map, by = "region")
+
+# Static map of renewable share by state (2023)
+ggplot(map_data_2023, aes(long, lat, group = group, fill = renewable_share)) +
+  geom_polygon(color = "white", linewidth = 0.2) +
+  coord_fixed(1.3) +
+  scale_fill_gradient(low = "lightyellow", high = "darkgreen",
+                      name = "Renewable Share",
+                      labels = scales::percent_format(accuracy = 1)) +
+  labs(
+    title = "Share of Renewable Energy by State (2023)",
+    subtitle = "Percentage of total electricity from renewable sources",
+    caption = "Data: U.S. Energy datasets (2021–2023)"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text = element_blank(),
+    axis.title = element_blank(),
+    panel.grid = element_blank(),
+    plot.title = element_text(size = 14, face = "bold"),
+    legend.position = "right"
+  )
 ```
+
+## **Part 4: Analysis**
+
+The maps reveal clear spatial and temporal trends in renewable electricity use:
+1. Overall increase: Between 2021 and 2023, most states show gradual growth in renewable energy shares, with noticeable gains in the Pacific Northwest and New England.
+
+2. Regional differences: Western and northeastern states, including Washington, Oregon, and Vermont, maintain the highest renewable shares, while Southeastern states like Alabama and Louisiana remain heavily fossil-fuel-dependent.
+
+3. 2023 snapshot: States such as Vermont, Maine, and Washington generate over 30% of their electricity from renewables, while several southern states remain below 10%.
+
+These findings suggest that while renewable capacity is rising nationwide, the transition remains uneven.
+The geographic maps effectively highlight where progress is concentrated and where policy or investment gaps may persist.
